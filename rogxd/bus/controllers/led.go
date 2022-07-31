@@ -1,24 +1,9 @@
 package controllers
 
 import (
-	"encoding/json"
 	"rogxd/rogxd/bus"
+	"rogxd/rogxd/bus/models"
 )
-
-var LedModes = [12]string{
-	"Static",
-	"Breathe",
-	"Strobe",
-	"Rainbow",
-	"Star",
-	"Rain",
-	"Highlight",
-	"Laser",
-	"Ripple",
-	"Pulse",
-	"Comet",
-	"Flash",
-}
 
 const (
 	Off Brightness = iota
@@ -36,107 +21,112 @@ const (
 
 type (
 	Direction     string
-	Brightness    uint32
+	Brightness    byte
 	LedController struct {
-		NextLedBrightness func() bool                               // Cycle to the next brightness level.
-		PrevLedBrightness func() bool                               // Cycle to the previous brightness level.
-		NextLedMode       func() bool                               // Cycle to the next led mode.
-		PrevLedMode       func() bool                               // Cycle to the previous led mode.
-		LedBrightness     func() int16                              // Get the current keyboard brightness.
-		LedMode           func() LedMode                            // Get the current led mode.
-		LedModes          func() map[string]LedMode                 // List all available led modes.
-		SetLedBrightness  func(brightness Brightness) bool          // Set a specific keyboard brightness.
-		WatchLedChange    func(handler func(signal LedSignal)) bool // Subscribe for led mode changes.
+		Object          *RogXObject
+		BacklightObject *RogXObject
 	}
 	LedMode struct {
-		Mode      string `json:"mode"`
-		Zone      string `json:"zone"`
-		Color1    Color  `json:"colour1"`
-		Color2    Color  `json:"colour2"`
-		Speed     string `json:"speed"`
-		Direction string `json:"direction"`
+		Mode      string       `json:"mode"`
+		Zone      string       `json:"zone"`
+		Color1    models.Color `json:"colour1"`
+		Color2    models.Color `json:"colour2"`
+		Speed     string       `json:"speed"`
+		Direction string       `json:"direction"`
 	}
-	Color struct {
-		R byte // Red channel
-		G byte // Green channel
-		B byte // Blue channel
-	}
-	LedSignal struct {
-		Mode      uint32
+	AuraEffect struct {
+		Mode      models.AuraMode
 		Zone      uint32
-		Color1    Color
-		Color2    Color
+		Color1    models.Color
+		Color2    models.Color
 		Speed     uint32
 		Direction uint32
 	}
 )
 
-func ParseLedSignal(signal []interface{}) LedSignal {
-	if len(signal) < 5 {
-		return LedSignal{}
+func ParseAuraEffect(effect []interface{}) AuraEffect {
+	if len(effect) < 5 {
+		return AuraEffect{}
 	}
-	return LedSignal{signal[0].(uint32), signal[1].(uint32), NewColor(signal[2]), NewColor(signal[3]), signal[4].(uint32), signal[5].(uint32)}
+	return AuraEffect{models.AuraMode(effect[0].(uint32)), effect[1].(uint32), models.NewColor(effect[2]), models.NewColor(effect[3]), effect[4].(uint32), effect[5].(uint32)}
 }
 
-func NewColor(colorArr interface{}) Color {
-	c := colorArr.([]interface{})
-	r, g, b := c[0].(byte), c[1].(byte), c[2].(byte)
-	return Color{r, g, b}
+// NextLedBrightness Cycle to the next brightness level.
+func (controller *LedController) NextLedBrightness() bool {
+	return controller.Object.Call("NextLedBrightness") == nil
 }
 
-func (c *Color) UnmarshalJSON(bytes []byte) error {
-	var cb [3]byte
-	err := json.Unmarshal(bytes, &cb)
-	if err != nil {
-		return err
+// PrevLedBrightness Cycle to the previous brightness level.
+func (controller *LedController) PrevLedBrightness() bool {
+	return controller.Object.Call("PrevLedBrightness") == nil
+}
+
+// NextLedMode Cycle to the next led mode.
+func (controller *LedController) NextLedMode() bool {
+	return controller.Object.Call("NextLedMode") == nil
+}
+
+// PrevLedMode Cycle to the previous led mode.
+func (controller *LedController) PrevLedMode() bool {
+	return controller.Object.Call("PrevLedMode") == nil
+}
+
+// LedBrightness Get the current keyboard brightness.
+func (controller *LedController) LedBrightness() Brightness {
+	var brightness int32
+	controller.BacklightObject.CallWithOut("GetBrightness", &brightness, 0)
+	return Brightness(brightness)
+}
+
+// LedMode Get the current led mode.
+func (controller *LedController) LedMode() (mode LedMode) {
+	var modeStr string
+	if !controller.Object.Property("LedMode", &modeStr) {
+		return
 	}
-	c.R, c.G, c.B = cb[0], cb[1], cb[2]
-	return nil
+	bus.Deserialize(modeStr, &mode)
+	return
 }
 
-func GetLedController(conn *RogXConn) LedController {
-	obj := conn.System.Object(bus.ASUS_DEST, bus.LED_CONTROLLER_PATH)
-	return LedController{
-		NextLedBrightness: func() bool {
-			return bus.Call(obj, "NextLedBrightness") == nil
-		},
-		PrevLedBrightness: func() bool {
-			return bus.Call(obj, "PrevLedBrightness") == nil
-		},
-		NextLedMode: func() bool {
-			return bus.Call(obj, "NextLedMode") == nil
-		},
-		PrevLedMode: func() bool {
-			return bus.Call(obj, "PrevLedMode") == nil
-		},
-		LedBrightness: func() (brightness int16) {
-			bus.Property(obj, "LedBrightness", &brightness)
-			return
-		},
-		LedMode: func() (mode LedMode) {
-			var modeStr string
-			if !bus.Property(obj, "LedMode", &modeStr) {
-				return
-			}
-			bus.Deserialize(modeStr, &mode)
-			return
-		},
-		LedModes: func() (modes map[string]LedMode) {
-			var modesStr string
-			if !bus.Property(obj, "LedModes", &modesStr) {
-				return
-			}
-			bus.Deserialize(modesStr, &modes)
-			return
-		},
-		SetLedBrightness: func(brightness Brightness) bool {
-			return bus.Call(obj, "SetBrightness", brightness) == nil
-		},
-		WatchLedChange: func(handler func(signal LedSignal)) bool {
-			return conn.RegisterHandler(bus.LED_CONTROLLER_PATH, "NotifyLed", func(body []interface{}) {
-				signal := ParseLedSignal(body[0].([]interface{}))
-				handler(signal)
-			})
-		},
+// LedModes List all available led modes.
+func (controller *LedController) LedModes() (modes map[string]LedMode) {
+	var modesStr string
+	if !controller.Object.Property("LedModes", &modesStr) {
+		return
+	}
+	bus.Deserialize(modesStr, &modes)
+	return
+}
+
+// SetLedBrightness Set a specific keyboard brightness.
+func (controller *LedController) SetLedBrightness(brightness Brightness) bool {
+	return controller.BacklightObject.Call("SetBrightness", int32(brightness)) == nil
+}
+
+// WatchLedChange Subscribe for led mode changes.
+func (controller *LedController) WatchLedChange(handler func(effect AuraEffect)) bool {
+	return controller.Object.RogX.RegisterHandler(bus.AsusDest, bus.DefaultInterface, bus.LedControllerPath, "NotifyLed", func(body []interface{}) {
+		auraEffect := ParseAuraEffect(body[0].([]interface{}))
+		handler(auraEffect)
+	})
+}
+
+// MaxBrightness Get maximum brightness
+func (controller *LedController) MaxBrightness() (brightness Brightness) {
+	controller.BacklightObject.CallWithOut("GetMaxBrightness", &brightness, 0)
+	return
+}
+
+// WatchBrightnessChange Subscribe for brightness changes
+func (controller *LedController) WatchBrightnessChange(handler func(brightness Brightness)) {
+	controller.Object.RogX.RegisterHandler(bus.PowerDest, bus.KbdBacklightInterface, bus.KbdBacklightControllerPath, "BrightnessChanged", func(body []interface{}) {
+		handler(Brightness(body[0].(int32)))
+	})
+}
+
+func GetLedController(conn *RogXConn) *LedController {
+	return &LedController{
+		Object:          NewObject(conn, bus.AsusDest, bus.DefaultInterface, bus.LedControllerPath),
+		BacklightObject: NewObject(conn, bus.PowerDest, bus.KbdBacklightInterface, bus.KbdBacklightControllerPath),
 	}
 }

@@ -8,14 +8,17 @@ import (
 
 type (
 	RogXConn struct {
-		Handlers map[string]func(body []interface{})
-		System   *dbus.Conn
+		Handlers            map[string]func(body []interface{})
+		Bus                 *dbus.Conn
+		BacklightController *BacklightController
+		LedController       *LedController
+		ChargeController    *ChargeController
 	}
 )
 
-func (conn *RogXConn) handleSignals() {
+func handleSignals(conn *RogXConn) {
 	c := make(chan *dbus.Signal)
-	conn.System.Signal(c)
+	conn.Bus.Signal(c)
 	go func() {
 		for r := range c {
 			if handler := conn.Handlers[r.Name]; handler != nil {
@@ -30,31 +33,26 @@ func NewRogXConn() (conn *RogXConn) {
 	if e != nil {
 		log.Fatalln(e)
 	}
-	conn = &RogXConn{Handlers: make(map[string]func([]interface{})), System: sysConn}
-	conn.handleSignals()
+	conn = &RogXConn{Handlers: make(map[string]func([]interface{})), Bus: sysConn}
+	conn.LedController = GetLedController(conn)
+	conn.ChargeController = GetChargeController(conn)
+	conn.BacklightController = GetBacklightController(conn)
+	handleSignals(conn)
 	return
 }
 
 func (conn *RogXConn) Close() bool {
-	return conn.System.Close() == nil
+	return conn.Bus.Close() == nil
 }
 
-func (conn *RogXConn) RegisterHandler(path dbus.ObjectPath, member string, handler func(body []interface{})) bool {
-	sConn := conn.System
+func (conn *RogXConn) RegisterHandler(dest string, iface string, path dbus.ObjectPath, member string, handler func(body []interface{})) bool {
+	sConn := conn.Bus
 	if sConn.AddMatchSignal(dbus.WithMatchObjectPath(path),
-		dbus.WithMatchInterface(bus.ASUS_DEST),
-		dbus.WithMatchSender(bus.ASUS_DEST),
+		dbus.WithMatchInterface(iface),
+		dbus.WithMatchSender(dest),
 		dbus.WithMatchMember(member)) != nil {
 		return false
 	}
-	conn.Handlers[bus.Dest(bus.ASUS_DEST, member)] = handler
+	conn.Handlers[bus.Dest(iface, member)] = handler
 	return true
-}
-
-func (conn *RogXConn) ChargeController() ChargeController {
-	return GetChargeController(conn)
-}
-
-func (conn *RogXConn) LedController() LedController {
-	return GetLedController(conn)
 }
